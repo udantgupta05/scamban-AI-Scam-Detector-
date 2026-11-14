@@ -1,0 +1,47 @@
+From: "PayPal Support" <service@paypa1-security.xyz>
+To: student@example.com
+Reply-To: recovery.desk@gmail.com
+Subject: URGENT: Your account has been limited
+Received: from mail.fake-host.example ([203.0.113.45]) by mx.example.com; Mon,
+ 2 Nov 2026 09:10:00 +0530
+Received: from mx.example.com ([10.0.0.5]) by inbox.example.com; Mon, 2 Nov
+ 2026 09:10:02 +0530
+Authentication-Results: mx.example.com; spf=fail
+ smtp.mailfrom=paypa1-security.xyz; dkim=none; dmarc=fail
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============4030009591829950321=="
+
+--===============4030009591829950321==
+Content-Type: multipart/alternative;
+ boundary="===============5529286915814137851=="
+
+--===============5529286915814137851==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Your account has been limited. Verify your password and card number immediate=
+ly.
+
+--===============5529286915814137851==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><body>
+<p>Dear customer, your account has been <b>limited</b>. Verify your password =
+and card number immediately
+or your account will be closed.</p>
+<p><a href=3D"http://paypa1-security.xyz/login">www.paypal.com/verify</a></p>
+</body></html>
+
+--===============5529286915814137851==--
+
+--===============4030009591829950321==
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="Invoice_2026.pdf.exe"
+MIME-Version: 1.0
+
+SEFSTUxFU1MgRFVNTVkgRklMRSBGT1IgVEVTVElORyBPTkxZ
+
+--===============4030009591829950321==--

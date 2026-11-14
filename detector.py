@@ -8,6 +8,9 @@ Follows the flow from the SRS:
 Steps 1-4 live in this file, one function each.
 Step 5 (Detection Result = showing the report to the user) lives in app.py.
 
+New in this version: the sender, links and attachments are also checked
+(see source_checker.py) and added to the report.
+
 You can test this file WITHOUT the screen by running:   python detector.py
 """
 
@@ -18,6 +21,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import MultinomialNB
 
+from source_checker import check_source
 from training_data import EMAILS, LABELS
 
 MAX_LENGTH = 5000   # PR-04: maximum email size we accept (characters)
@@ -55,7 +59,7 @@ def train_models():
 def source_input(text):
     """Check the email text. Returns (is_valid, message)."""
     if text is None or text.strip() == "":
-        return False, "Please paste some email content first. The box is empty."
+        return False, "There is no email content to analyse. Please paste an email or upload a file."
 
     if len(text) > MAX_LENGTH:
         return False, f"The email is too long. Please keep it under {MAX_LENGTH} characters."
@@ -92,7 +96,7 @@ def filtering(text, vectorizer, models):
 # ======================================================================
 # STEP 3 - ANALYSIS   (FR-10 to FR-13)
 # ======================================================================
-def analysis(individual_results):
+def analysis(individual_results, source_warnings=0):
     """Compare the three results -> overall classification + risk level.
 
     NOTE: the SRS does not say HOW to combine the results, so this is my
@@ -101,6 +105,10 @@ def analysis(individual_results):
         1 or 2 say scam        -> Suspicious        (they disagree)
         all 3 say scam         -> Potentially Fraudulent
     The risk level uses the average 'chance of scam' of the three algorithms.
+
+    NEW extra rule: scammers can write a normal-looking message from a fake
+    address. So if the text looks fine but 2 or more warnings were found in the
+    sender / links / attachments, 'Legitimate' is raised to 'Suspicious'.
     """
     votes_for_scam = sum(1 for r in individual_results.values() if r["verdict"] == "Scam")
     average_chance = sum(r["chance_scam"] for r in individual_results.values()) / len(individual_results)
@@ -121,7 +129,16 @@ def analysis(individual_results):
     else:
         risk_level = "High"
 
-    return {"overall_classification": overall_classification, "risk_level": risk_level}
+    # The extra rule described above
+    note = ""
+    if overall_classification == "Legitimate" and source_warnings >= 2:
+        overall_classification = "Suspicious"
+        if risk_level == "Low":
+            risk_level = "Medium"
+        note = ("The message text looks normal, but the sender, links or attachments "
+                "raised warnings, so the result was raised to Suspicious.")
+
+    return {"overall_classification": overall_classification, "risk_level": risk_level, "note": note}
 
 
 # ======================================================================
@@ -186,7 +203,7 @@ GUIDANCE = {
 }
 
 
-def generate_report(text, individual_results, analysis_result):
+def generate_report(text, individual_results, analysis_result, source_info):
     """Pack everything into one neat report (a dictionary)."""
     classification = analysis_result["overall_classification"]
     return {
@@ -194,19 +211,65 @@ def generate_report(text, individual_results, analysis_result):
         "risk_level": analysis_result["risk_level"],
         "risk_indicators": find_risk_indicators(text),
         "guidance": GUIDANCE[classification],
+        "note": analysis_result["note"],
         # For transparency we show each algorithm's verdict (but not its score)
         "algorithm_verdicts": {name: r["verdict"] for name, r in individual_results.items()},
+        # NEW: the sender / links / attachments findings from source_checker.py
+        "source_info": source_info,
     }
+
+
+def report_as_text(report):
+    """Turn the report into plain text, for the 'Download report' button."""
+    lines = ["AI SCAM DETECTOR - REPORT", "=" * 40,
+             f"Classification : {report['overall_classification']}",
+             f"Risk level     : {report['risk_level']}"]
+    if report["note"]:
+        lines.append(f"Note           : {report['note']}")
+
+    lines += ["", "Risk indicators:"]
+    lines += [f"  - {item}" for item in report["risk_indicators"]] or ["  - none found"]
+
+    sender = report["source_info"]["sender"]
+    lines += ["", "Mail source:"]
+    if sender["found"]:
+        lines += [f"  Sender : {sender['name']} <{sender['address']}>",
+                  f"  Domain : {sender['domain']} ({sender['domain_type']})",
+                  f"  Origin IP : {sender['origin_ip'] or 'not available'}"]
+        lines += [f"  WARNING: {w}" for w in sender["warnings"]]
+    else:
+        lines.append("  No sender information was found.")
+
+    lines += ["", "Links:"]
+    for link in report["source_info"]["links"]:
+        lines.append(f"  - {link['url']}")
+        lines += [f"      WARNING: {flag}" for flag in link["flags"]]
+    if not report["source_info"]["links"]:
+        lines.append("  none found")
+
+    lines += ["", "Attachments:"]
+    for item in report["source_info"]["attachments"]:
+        lines.append(f"  - {item['name']}")
+        lines += [f"      WARNING: {flag}" for flag in item["flags"]]
+    if not report["source_info"]["attachments"]:
+        lines.append("  none")
+
+    lines += ["", "Algorithm verdicts:"]
+    lines += [f"  - {name}: {verdict}" for name, verdict in report["algorithm_verdicts"].items()]
+    lines += ["", "Guidance:", f"  {report['guidance']}", "",
+              "This is an automated assessment, not a guarantee that an email is safe or fraudulent."]
+    return "\n".join(lines)
 
 
 # ======================================================================
 # RUN THE WHOLE PIPELINE (this is what app.py calls)
 # ======================================================================
-def detect(raw_text, vectorizer, models):
-    """Runs Steps 1 to 4 in order and returns a dictionary with a 'status'."""
+def detect(parsed, vectorizer, models):
+    """Runs Steps 1 to 4 in order and returns a dictionary with a 'status'.
+    'parsed' comes from email_parser.py (pasted text OR uploaded file)."""
 
     # Step 1: Source Input
-    is_valid, result = source_input(raw_text)
+    is_valid, result = source_input(parsed["model_text"])
     if not is_valid:
         return {"status": "invalid", "message": result}
 
@@ -216,11 +279,14 @@ def detect(raw_text, vectorizer, models):
     except ValueError as error:
         return {"status": "error", "message": str(error)}
 
+    # NEW: check where the email came from (sender, links, attachments)
+    source_info = check_source(parsed)
+
     # Step 3: Analysis
-    analysis_result = analysis(individual_results)
+    analysis_result = analysis(individual_results, source_info["warning_count"])
 
     # Step 4: Report Generation
-    report = generate_report(result, individual_results, analysis_result)
+    report = generate_report(result, individual_results, analysis_result, source_info)
     return {"status": "ok", "report": report}
 
 
@@ -228,6 +294,8 @@ def detect(raw_text, vectorizer, models):
 # QUICK TEST: run `python detector.py` in the terminal
 # ======================================================================
 if __name__ == "__main__":
+    from email_parser import parse_email_text
+
     vectorizer, models = train_models()
 
     samples = [
@@ -235,6 +303,7 @@ if __name__ == "__main__":
         "Hi Anita, the project meeting is moved to Thursday at 2 pm. Please bring the updated report.",
     ]
     for sample in samples:
-        print("EMAIL :", sample)
-        print("RESULT:", detect(sample, vectorizer, models))
+        report = detect(parse_email_text(sample), vectorizer, models)["report"]
+        print("EMAIL         :", sample)
+        print("CLASSIFICATION:", report["overall_classification"], "| RISK:", report["risk_level"])
         print("-" * 60)
